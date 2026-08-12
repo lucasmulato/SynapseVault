@@ -1,0 +1,27 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  background-color: #09090b;
+  color: #fafafa;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+.node {
+  cursor: pointer;
+  transition: r 0.2s ease-in-out;
+}
+
+.node:hover {
+  r: 10;
+}
+
+.link {
+  stroke-opacity: 0.6;
+  stroke-width: 1.5px;
+}
