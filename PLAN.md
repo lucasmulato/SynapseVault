@@ -1,6 +1,6 @@
 # SynapseVault — Improvement Plan
 
-> Living document. Last updated: 2026-08-23.
+> Living document. Last updated: 2026-08-23 (round 2).
 > This file is tracked in git so progress can be reviewed over time.
 
 ## 1. What we are building
@@ -46,22 +46,33 @@ The repo was functional but had drifted:
 - `docker-compose up --build` — all three services come up; `/api/health` and
   `/api/graph` return data; graph renders nodes from PostgreSQL.
 
-## 5. Open / next
+## 5. Work completed (2026-08-23, round 2)
 
-- [ ] Wire the `+` add-node flow end-to-end through Docker (UI → proxy → API →
-      Postgres) and confirm the new node appears live.
-- [ ] Add edge creation from the UI (drag-to-connect or sidebar form).
-- [ ] Persist graph layout (node positions) so it survives a reload.
-- [ ] Replace the Vertex AI stub (`scripts/deploy_agent.py`) with a real agent
-      that calls the MCP gateway tools.
-- [ ] Add tests: a smoke test against a temporary Postgres verifying
-      add_node → add_edge → get_graph round-trips.
-- [ ] Harden: JWT/auth on the HTTP surface, request rate limiting, secrets
-      management.
-- [ ] Decide long-term: keep MCP stdio + HTTP in one process, or split into
-      separate services.
+| Phase | What changed |
+|-------|--------------|
+| 0. Baseline | Untangled the inconsistent git index (files staged then deleted) and committed the round-1 refactor as one atomic commit after verifying API build + UI lint/build. |
+| 1. Edge creation | Connect mode in `App.tsx`: pick source node → relationship label → target node → POST `/api/edges`. Graph is refetched after every mutation so edges render live; edge labels drawn at link midpoints. |
+| 2. Layout persistence | Drag-end saves positions into node `properties._x/_y` via debounced PATCH `/api/nodes/:id`; saved nodes are pinned on load so layout survives reloads. d3 drag coords are now inverted through the zoom transform (fixes offset drags while zoomed). |
+| 3. Hardening + tests | zod validation on all POST/PATCH bodies; fixed-window rate limit (60 mutations/min/IP); Postgres unique-violation now maps to 409. `scripts/smoke_test.sh` runs an ephemeral Postgres + API and verifies health → add_node → 400s → add_edge → duplicate 409 → position PATCH → graph shape → search; wired into `ci.yaml`. |
+| 4. Agent | Deleted `scripts/deploy_agent.py` and all Vertex AI/GCP references (zero-cost requirement: R$0 budget, 4GB RAM laptop — local LLMs not viable). New optional agent (`api/src/services/agent.ts`): OpenAI-compatible chat-completions with a tool-calling loop over `add_node` / `add_edge` / `search_nodes`. Defaults to Groq free tier; entirely disabled unless `LLM_API_KEY` is set. UI chat panel wired to the previously dead MessageSquare button via `/api/chat/status` + `/api/chat`, refetching the graph when the agent mutates it. |
 
-## 6. Conventions to keep
+## 6. Verified
+
+- `cd api && npm run build` and `cd ui && npm run lint && npm run build`.
+- `./scripts/smoke_test.sh` — all assertions pass.
+- Chat endpoints verified disabled-without-key path (503 + UI hint).
+
+## 7. Open / next
+
+- [ ] Verify add-node / connect flows end-to-end through Docker Compose on a
+      real browser session.
+- [ ] Node editing/deletion from the UI sidebar ("Edit Node" button is still
+      a stub).
+- [ ] Search UI: wire the Search button to `/api/search`.
+- [ ] Optional token auth for non-localhost deployments.
+- [ ] Consider SSE/WebSocket push instead of full graph refetch per mutation.
+
+## 8. Conventions to keep
 
 - One source of truth for graph logic (`api/src/services/vault.ts`) shared by
   both surfaces.

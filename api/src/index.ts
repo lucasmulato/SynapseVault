@@ -8,6 +8,7 @@ import { Client } from "pg";
 import { z } from "zod";
 import http from "node:http";
 import { VaultService } from "./services/vault.js";
+import { GraphAgent, chatConfigFromEnv } from "./services/agent.js";
 
 // 1. Database Connection
 const DATABASE_URL =
@@ -27,6 +28,11 @@ async function connectDb() {
 
 // 2. Shared service - used by both MCP and HTTP so they can't drift apart
 const vault = new VaultService(client);
+
+// Optional reasoning layer: only constructed when LLM_API_KEY is set.
+const agent = chatConfigFromEnv()
+  ? new GraphAgent(chatConfigFromEnv()!, vault)
+  : null;
 
 // 3. MCP Server Setup
 const server = new Server(
@@ -172,6 +178,10 @@ const patchNodeSchema = z.object({
   properties: z.record(z.string(), z.unknown()),
 });
 
+const chatSchema = z.object({
+  message: z.string().min(1).max(4000),
+});
+
 // Simple fixed-window per-IP limiter for mutating requests.
 const RATE_LIMIT = { windowMs: 60_000, max: 60 };
 const rateBuckets = new Map<string, { count: number; resetAt: number }>();
@@ -302,6 +312,36 @@ async function handleHttp(
       }
       const row = await vault.addEdge(parsed.data);
       sendJson(res, 201, row);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/api/chat/status") {
+      sendJson(res, 200, {
+        configured: agent !== null,
+        model: agent ? chatConfigFromEnv()!.model : null,
+      });
+      return;
+    }
+
+    if (req.method === "POST" && path === "/api/chat") {
+      if (isRateLimited(req.socket.remoteAddress ?? "unknown")) {
+        sendJson(res, 429, { error: "Too many requests" });
+        return;
+      }
+      if (!agent) {
+        sendJson(res, 503, {
+          error:
+            "Chat disabled: set LLM_API_KEY (and optionally LLM_BASE_URL / LLM_MODEL) to enable it.",
+        });
+        return;
+      }
+      const parsed = chatSchema.safeParse(await readBody(req));
+      if (!parsed.success) {
+        sendJson(res, 400, { error: z.prettifyError(parsed.error) });
+        return;
+      }
+      const result = await agent.chat(parsed.data.message);
+      sendJson(res, 200, result);
       return;
     }
 

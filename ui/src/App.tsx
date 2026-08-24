@@ -12,6 +12,7 @@ import {
   Link2,
   X,
 } from 'lucide-react';
+import ChatPanel from './components/ChatPanel';
 
 interface NodeRow {
   id: string;
@@ -54,6 +55,7 @@ const App: React.FC = () => {
   const [connect, setConnect] = useState<
     { source?: string; label?: EdgeLabel } | null
   >(null);
+  const [showChat, setShowChat] = useState(false);
 
   // Positions changed since last save (id -> x/y), flushed on a debounce.
   const pendingPositions = useRef<Map<string, NodePosition>>(new Map());
@@ -223,7 +225,13 @@ const App: React.FC = () => {
           >
             <Link2 size={24} />
           </button>
-          <button className="p-2 text-zinc-500 hover:text-white transition-colors">
+          <button
+            onClick={() => setShowChat((v) => !v)}
+            className={`p-2 transition-colors ${
+              showChat ? 'text-blue-400 bg-zinc-800 rounded-md' : 'text-zinc-500 hover:text-white'
+            }`}
+            title="Chat with the graph agent"
+          >
             <MessageSquare size={24} />
           </button>
         </div>
@@ -326,6 +334,13 @@ const App: React.FC = () => {
               </p>
             )}
           </div>
+        )}
+
+        {showChat && (
+          <ChatPanel
+            onClose={() => setShowChat(false)}
+            onGraphChanged={refresh}
+          />
         )}
 
         <GraphView

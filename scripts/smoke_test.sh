@@ -35,8 +35,16 @@ for i in $(seq 1 30); do
 done
 
 echo "[smoke] applying schema..."
-docker exec -i "$CONTAINER" psql -U postgres -d synapsevault \
-  <"${SCRIPT_DIR}/schema.sql" >/dev/null
+schema_applied=0
+for i in $(seq 1 30); do
+  if docker exec -i "$CONTAINER" psql -U postgres -d synapsevault \
+    <"${SCRIPT_DIR}/schema.sql" >/dev/null 2>&1; then
+    schema_applied=1
+    break
+  fi
+  sleep 1
+done
+[[ "$schema_applied" == "1" ]] || { echo "[smoke] FAIL: could not apply schema"; exit 1; }
 
 echo "[smoke] starting API on :${API_PORT}..."
 DATABASE_URL="postgresql://postgres:postgres@localhost:${DB_PORT}/synapsevault" \

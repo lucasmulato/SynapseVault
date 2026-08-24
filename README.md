@@ -9,7 +9,8 @@ ideas, projects, and tasks using a local-first architecture.
 - **Gateway**: Node.js MCP Gateway — exposes the graph as MCP tools *and* as
   an HTTP REST API used by the UI. One process, two surfaces.
 - **Interface**: React + D3.js Force-Directed Graph Dashboard.
-- **Reasoning**: Vertex AI Reasoning Engine (optional, deployed separately).
+- **Reasoning (optional)**: an OpenAI-compatible chat agent (Groq free tier
+  by default — R$0). Disabled unless `LLM_API_KEY` is set.
 
 ## Services
 
@@ -63,11 +64,18 @@ This launches the database, API, and UI automatically.
    npm run dev
    ```
 
-4. **Deploy the Reasoning Engine (Optional)**
+4. **Enable the Chat Agent (Optional, free)**
+
+   Create a free API key at [groq.com](https://console.groq.com), then add it
+   to `api/.env`:
 
    ```bash
-   python3 scripts/deploy_agent.py
+   LLM_API_KEY=gsk_...
    ```
+
+   Restart the gateway — the chat button in the UI becomes active and can
+   create/search nodes on your behalf. Any OpenAI-compatible provider works
+   via `LLM_BASE_URL` / `LLM_MODEL`.
 
 ## Dashboard Features
 
@@ -77,28 +85,40 @@ This launches the database, API, and UI automatically.
   - 🟢 **Projects**: Structured collections of work.
   - 🟠 **Tasks**: Actionable items.
 - **Interrelation**: Direct visual mapping of how projects contain tasks and
-  ideas relate to each other.
+  ideas relate to each other; edges show their relationship labels.
 - **Add Nodes**: Click the `+` in the sidebar to create a node from the UI;
   changes appear live on the graph.
+- **Connect Nodes**: Click the link icon in the sidebar, pick source node →
+  relationship label → target node to create an edge.
+- **Persistent Layout**: Drag nodes into place — positions survive reloads.
+- **Chat (optional)**: The chat button talks to an LLM agent that can create
+  and search nodes for you. Free via Groq; disabled without an API key.
 
 ## API Reference
 
 The gateway exposes the same logic over MCP stdio and HTTP REST:
 
-| Method | Path            | Description                              |
-|--------|-----------------|------------------------------------------|
-| GET    | `/api/health`   | Health check                             |
-| GET    | `/api/graph`    | All nodes + edges for visualization     |
-| POST   | `/api/nodes`    | Create a node (`type`, `name`, ...)     |
-| POST   | `/api/edges`    | Create an edge (`source_id`, `target_id`, `label`) |
-| GET    | `/api/search`   | Search nodes by `query` and/or `type`   |
+| Method | Path                | Description                                        |
+|--------|---------------------|----------------------------------------------------|
+| GET    | `/api/health`       | Health check                                       |
+| GET    | `/api/graph`        | All nodes + edges for visualization               |
+| POST   | `/api/nodes`        | Create a node (`type`, `name`, ...)               |
+| PATCH  | `/api/nodes/:id`    | Merge `properties` into an existing node          |
+| POST   | `/api/edges`        | Create an edge (`source_id`, `target_id`, `label`) |
+| GET    | `/api/search`       | Search nodes by `query` and/or `type`             |
+| GET    | `/api/chat/status`  | Whether the optional chat agent is configured     |
+| POST   | `/api/chat`         | Chat with the agent (`message`)                   |
+
+Mutating routes are rate limited (60 requests/min/IP) and validated with zod.
 
 ## Development
 
 - **Lint**: `cd ui && npm run lint`
 - **Type-check + build API**: `cd api && npm run build`
-- **CI**: `.github/workflows/ci.yaml` runs API build + UI lint/build on every
-  push and pull request.
+- **Smoke tests** (requires Docker/podman): `./scripts/smoke_test.sh` spins up
+  an ephemeral Postgres and verifies the full HTTP round-trip.
+- **CI**: `.github/workflows/ci.yaml` runs API build + smoke tests + UI
+  lint/build on every push and pull request.
 
 ## License
 
