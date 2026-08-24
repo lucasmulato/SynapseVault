@@ -5,6 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "pg";
+import { z } from "zod";
 import http from "node:http";
 import { VaultService } from "./services/vault.js";
 
@@ -153,6 +154,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // 6. HTTP REST surface for the UI
+const addNodeSchema = z.object({
+  type: z.enum(["idea", "project", "task", "label"]),
+  name: z.string().min(1).max(500),
+  description: z.string().max(10000).optional(),
+  properties: z.record(z.string(), z.unknown()).optional(),
+});
+
+const addEdgeSchema = z.object({
+  source_id: z.string().uuid(),
+  target_id: z.string().uuid(),
+  label: z.enum(["relates_to", "contains", "depends_on", "tagged_with"]),
+  properties: z.record(z.string(), z.unknown()).optional(),
+});
+
+const patchNodeSchema = z.object({
+  properties: z.record(z.string(), z.unknown()),
+});
+
+// Simple fixed-window per-IP limiter for mutating requests.
+const RATE_LIMIT = { windowMs: 60_000, max: 60 };
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+
+function isRateLimited(ip: string): boolean {
+  const now = Date.now();
+  const bucket = rateBuckets.get(ip);
+  if (!bucket || bucket.resetAt < now) {
+    rateBuckets.set(ip, { count: 1, resetAt: now + RATE_LIMIT.windowMs });
+    return false;
+  }
+  bucket.count += 1;
+  // Opportunistic cleanup so the map cannot grow unbounded.
+  if (rateBuckets.size > 10_000) {
+    for (const [key, b] of rateBuckets) {
+      if (b.resetAt < now) rateBuckets.delete(key);
+    }
+  }
+  return bucket.count > RATE_LIMIT.max;
+}
+
 function sendJson(res: http.ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
@@ -216,20 +256,32 @@ async function handleHttp(
     }
 
     if (req.method === "POST" && path === "/api/nodes") {
-      const body = (await readBody(req)) as any;
-      const row = await vault.addNode(body);
+      if (isRateLimited(req.socket.remoteAddress ?? "unknown")) {
+        sendJson(res, 429, { error: "Too many requests" });
+        return;
+      }
+      const parsed = addNodeSchema.safeParse(await readBody(req));
+      if (!parsed.success) {
+        sendJson(res, 400, { error: z.prettifyError(parsed.error) });
+        return;
+      }
+      const row = await vault.addNode(parsed.data);
       sendJson(res, 201, row);
       return;
     }
 
     if (req.method === "PATCH" && /^\/api\/nodes\/[\da-f-]+$/i.test(path)) {
-      const id = path.split("/").pop()!;
-      const body = (await readBody(req)) as { properties?: Record<string, unknown> };
-      if (!body.properties || typeof body.properties !== "object") {
-        sendJson(res, 400, { error: "properties object required" });
+      if (isRateLimited(req.socket.remoteAddress ?? "unknown")) {
+        sendJson(res, 429, { error: "Too many requests" });
         return;
       }
-      const row = await vault.updateNodeProperties(id, body.properties);
+      const parsed = patchNodeSchema.safeParse(await readBody(req));
+      if (!parsed.success) {
+        sendJson(res, 400, { error: z.prettifyError(parsed.error) });
+        return;
+      }
+      const id = path.split("/").pop()!;
+      const row = await vault.updateNodeProperties(id, parsed.data.properties);
       if (!row) {
         sendJson(res, 404, { error: "Node not found" });
         return;
@@ -239,15 +291,24 @@ async function handleHttp(
     }
 
     if (req.method === "POST" && path === "/api/edges") {
-      const body = (await readBody(req)) as any;
-      const row = await vault.addEdge(body);
+      if (isRateLimited(req.socket.remoteAddress ?? "unknown")) {
+        sendJson(res, 429, { error: "Too many requests" });
+        return;
+      }
+      const parsed = addEdgeSchema.safeParse(await readBody(req));
+      if (!parsed.success) {
+        sendJson(res, 400, { error: z.prettifyError(parsed.error) });
+        return;
+      }
+      const row = await vault.addEdge(parsed.data);
       sendJson(res, 201, row);
       return;
     }
 
     sendJson(res, 404, { error: "Not found" });
   } catch (err: any) {
-    const status = err.code === "23503" ? 409 : 400; // FK violation -> conflict
+    const status =
+      err.code === "23503" || err.code === "23505" ? 409 : 400; // FK / unique violations -> conflict
     sendJson(res, status, { error: err.message });
   }
 }

@@ -21,6 +21,9 @@ jobs:
         run: npm run build
         working-directory: api
 
+      - name: Smoke test (ephemeral Postgres round-trip)
+        run: ./scripts/smoke_test.sh
+
       # --- UI: lint + build ---
       - name: Install UI dependencies
         run: npm ci
