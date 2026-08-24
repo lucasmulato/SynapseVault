@@ -183,10 +183,10 @@ async function handleHttp(
 
   // CORS for local dev
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "GET, POST, OPTIONS"
-  );
+    res.setHeader(
+      "Access-Control-Allow-Methods",
+      "GET, POST, PATCH, OPTIONS"
+    );
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
   if (req.method === "OPTIONS") {
@@ -219,6 +219,22 @@ async function handleHttp(
       const body = (await readBody(req)) as any;
       const row = await vault.addNode(body);
       sendJson(res, 201, row);
+      return;
+    }
+
+    if (req.method === "PATCH" && /^\/api\/nodes\/[\da-f-]+$/i.test(path)) {
+      const id = path.split("/").pop()!;
+      const body = (await readBody(req)) as { properties?: Record<string, unknown> };
+      if (!body.properties || typeof body.properties !== "object") {
+        sendJson(res, 400, { error: "properties object required" });
+        return;
+      }
+      const row = await vault.updateNodeProperties(id, body.properties);
+      if (!row) {
+        sendJson(res, 404, { error: "Node not found" });
+        return;
+      }
+      sendJson(res, 200, row);
       return;
     }
 

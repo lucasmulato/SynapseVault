@@ -1,6 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import GraphView, { type GraphNode } from './components/GraphView';
-import { Brain, Plus, Search, Settings, MessageSquare, X } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import GraphView, {
+  type GraphNode,
+  type NodePosition,
+} from './components/GraphView';
+import {
+  Brain,
+  Plus,
+  Search,
+  Settings,
+  MessageSquare,
+  Link2,
+  X,
+} from 'lucide-react';
 
 interface NodeRow {
   id: string;
@@ -8,12 +19,22 @@ interface NodeRow {
   type: string;
   description: string | null;
   properties?: Record<string, unknown>;
+  created_at?: string;
 }
 
 interface GraphData {
   nodes: NodeRow[];
   edges: { source_id: string; target_id: string; label: string }[];
 }
+
+type EdgeLabel = 'relates_to' | 'contains' | 'depends_on' | 'tagged_with';
+
+const EDGE_LABELS: EdgeLabel[] = [
+  'relates_to',
+  'contains',
+  'depends_on',
+  'tagged_with',
+];
 
 const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined) ?? '/api';
@@ -24,59 +45,156 @@ const App: React.FC = () => {
   const [isSidebarOpen, setSidebarOpen] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<'idea' | 'project' | 'task'>('idea');
+  const [newType, setNewType] = useState<'idea' | 'project' | 'task' | 'label'>('idea');
   const [newDesc, setNewDesc] = useState('');
   const [adding, setAdding] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Edge-creation ("connect") mode state machine:
+  // null -> off | { source } -> source picked | { source, label } -> awaiting target
+  const [connect, setConnect] = useState<
+    { source?: string; label?: EdgeLabel } | null
+  >(null);
 
-    async function load() {
-      try {
-        const res = await fetch(`${API_BASE}/graph`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const graph: GraphData = await res.json();
-        if (!cancelled) setData(graph);
-      } catch (err) {
-        console.error('Failed to load graph:', err);
-      }
+  // Positions changed since last save (id -> x/y), flushed on a debounce.
+  const pendingPositions = useRef<Map<string, NodePosition>>(new Map());
+  const saveTimer = useRef<number | undefined>(undefined);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/graph`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setData(await res.json());
+    } catch (err) {
+      console.error('Failed to load graph:', err);
     }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
-  async function handleAddNode(e: React.FormEvent) {
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  function handleAddNode(e: React.FormEvent) {
     e.preventDefault();
     if (!newName.trim()) return;
     setAdding(true);
+    fetch(`${API_BASE}/nodes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: newType,
+        name: newName.trim(),
+        description: newDesc.trim() || undefined,
+      }),
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return refresh();
+      })
+      .then(() => {
+        setNewName('');
+        setNewDesc('');
+        setNewType('idea');
+        setShowAdd(false);
+      })
+      .catch((err) => console.error('Failed to add node:', err))
+      .finally(() => setAdding(false));
+  }
+
+  async function createEdge(targetId: string) {
+    if (!connect?.source || !connect.label) return;
     try {
-      const res = await fetch(`${API_BASE}/nodes`, {
+      const res = await fetch(`${API_BASE}/edges`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          type: newType,
-          name: newName.trim(),
-          description: newDesc.trim() || undefined,
+          source_id: connect.source,
+          target_id: targetId,
+          label: connect.label,
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const created: NodeRow = await res.json();
-      setData((prev) =>
-        prev ? { ...prev, nodes: [...prev.nodes, created] } : { nodes: [created], edges: [] }
-      );
-      setNewName('');
-      setNewDesc('');
-      setNewType('idea');
-      setShowAdd(false);
+      await refresh();
     } catch (err) {
-      console.error('Failed to add node:', err);
+      console.error('Failed to add edge:', err);
     } finally {
-      setAdding(false);
+      setConnect(null);
     }
   }
+
+  function handleNodeClick(node: GraphNode) {
+    if (connect) {
+      if (!connect.source) {
+        setConnect({ ...connect, source: node.id });
+      } else if (!connect.label) {
+        // Label picker is shown in the banner; ignore extra clicks until
+        // a label is chosen.
+      } else if (node.id !== connect.source) {
+        createEdge(node.id);
+      }
+      return;
+    }
+
+    setSelectedNode({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      description: node.description ?? null,
+      properties: node.properties,
+    });
+    setSidebarOpen(true);
+  }
+
+  function flushPositions() {
+    window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(async () => {
+      const batch = [...pendingPositions.current.entries()];
+      pendingPositions.current.clear();
+      for (const [id, pos] of batch) {
+        try {
+          const res = await fetch(`${API_BASE}/nodes/${id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              properties: { _x: pos.x, _y: pos.y },
+            }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          console.error('Failed to persist position:', err);
+        }
+      }
+    }, 800);
+  }
+
+  function handleNodePosition(id: string, x: number, y: number) {
+    pendingPositions.current.set(id, { x, y });
+    flushPositions();
+  }
+
+  // Saved layout positions live in node.properties (_x/_y).
+  const initialPositions: Record<string, NodePosition> | undefined =
+    data
+      ? Object.fromEntries(
+          data.nodes
+            .filter(
+              (n) =>
+                Number.isFinite(n.properties?._x) &&
+                Number.isFinite(n.properties?._y)
+            )
+            .map((n) => [
+              n.id,
+              { x: n.properties!._x as number, y: n.properties!._y as number },
+            ])
+        )
+      : undefined;
+
+  const connectBannerText = !connect
+    ? ''
+    : !connect.source
+      ? 'Connect: click the source node'
+      : !connect.label
+        ? 'Connect: choose a relationship label'
+        : 'Connect: click the target node';
 
   return (
     <div className="flex h-screen w-screen bg-zinc-950 text-zinc-100 font-sans overflow-hidden">
@@ -95,6 +213,15 @@ const App: React.FC = () => {
             title="Add node"
           >
             <Plus size={24} />
+          </button>
+          <button
+            onClick={() => setConnect(connect ? null : {})}
+            className={`p-2 transition-colors ${
+              connect ? 'text-blue-400 bg-zinc-800 rounded-md' : 'text-zinc-500 hover:text-white'
+            }`}
+            title="Connect two nodes"
+          >
+            <Link2 size={24} />
           </button>
           <button className="p-2 text-zinc-500 hover:text-white transition-colors">
             <MessageSquare size={24} />
@@ -137,6 +264,7 @@ const App: React.FC = () => {
                 <option value="idea">Idea</option>
                 <option value="project">Project</option>
                 <option value="task">Task</option>
+                <option value="label">Label</option>
               </select>
               <textarea
                 value={newDesc}
@@ -165,17 +293,47 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {connect && (
+          <div className="absolute top-20 left-1/2 -translate-x-1/2 z-20 w-full max-w-md bg-black/90 backdrop-blur-xl border border-zinc-800 rounded-2xl p-5 shadow-2xl">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wide">
+                {connectBannerText}
+              </h2>
+              <button
+                onClick={() => setConnect(null)}
+                className="p-1 hover:bg-zinc-800 rounded-md"
+                title="Cancel connect mode"
+              >
+                <X size={16} className="text-zinc-400" />
+              </button>
+            </div>
+            {!connect.label && connect.source && (
+              <div className="grid grid-cols-2 gap-2">
+                {EDGE_LABELS.map((label) => (
+                  <button
+                    key={label}
+                    onClick={() => setConnect({ source: connect.source, label })}
+                    className="px-3 py-2 text-xs rounded-lg border border-zinc-700 hover:border-blue-500 hover:bg-zinc-900 transition-colors"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {connect.source && connect.label && (
+              <p className="text-xs text-zinc-400">
+                Source selected. Now click a target node on the graph.
+              </p>
+            )}
+          </div>
+        )}
+
         <GraphView
           data={data}
-          onNodeClick={(node: GraphNode) => {
-            setSelectedNode({
-              id: node.id,
-              name: node.name,
-              type: node.type,
-              description: null,
-            });
-            setSidebarOpen(true);
-          }}
+          initialPositions={initialPositions}
+          onNodePosition={handleNodePosition}
+          highlightId={connect?.source ?? null}
+          onNodeClick={handleNodeClick}
         />
       </main>
 
@@ -215,8 +373,8 @@ const App: React.FC = () => {
               <div className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800">
                 <div className="text-zinc-500 mb-1">Created</div>
                 <div className="text-zinc-300">
-                  {selectedNode.properties?.created_at
-                    ? new Date(selectedNode.properties.created_at as string).toLocaleDateString()
+                  {selectedNode.created_at
+                    ? new Date(selectedNode.created_at).toLocaleDateString()
                     : '—'}
                 </div>
               </div>

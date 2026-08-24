@@ -73,6 +73,17 @@ export class VaultService {
     return res.rows[0];
   }
 
+  async updateNodeProperties(
+    id: string,
+    patch: Record<string, unknown>
+  ): Promise<NodeRow | undefined> {
+    const res = await this.client.query(
+      "UPDATE nodes SET properties = properties || $1::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $2::uuid RETURNING *",
+      [JSON.stringify(patch), id]
+    );
+    return res.rows[0];
+  }
+
   async searchNodes(query?: string, type?: string): Promise<NodeRow[]> {
     // All values are bound as parameters - no string interpolation of user input.
     let sql = "SELECT * FROM nodes WHERE 1=1";
