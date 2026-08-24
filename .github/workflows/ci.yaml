@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- API: type-check + build ---
+      - name: Install API dependencies
+        run: npm ci
+        working-directory: api
+
+      - name: Build API
+        run: npm run build
+        working-directory: api
+
+      # --- UI: lint + build ---
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Lint UI
+        run: npm run lint
+        working-directory: ui
+
+      - name: Build UI
+        run: npm run build
+        working-directory: ui

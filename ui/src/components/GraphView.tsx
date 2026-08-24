@@ -1,83 +1,132 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as d3 from 'd3';
 
-interface Node extends d3.SimulationNodeDatum {
+export interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
   name: string;
   type: string;
 }
 
-interface Edge extends d3.SimulationLinkDatum<Node> {
+export interface GraphEdge extends d3.SimulationLinkDatum<GraphNode> {
   label: string;
 }
 
-interface GraphData {
-  nodes: Node[];
-  edges: Edge[];
+export interface GraphData {
+  nodes: { id: string; name: string; type: string }[];
+  edges: { source_id: string; target_id: string; label: string }[];
 }
 
 interface GraphViewProps {
-  data: GraphData;
-  onNodeClick?: (node: Node) => void;
+  data: GraphData | null;
+  onNodeClick?: (node: GraphNode) => void;
 }
 
 const GraphView: React.FC<GraphViewProps> = ({ data, onNodeClick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
+  const [dimensions, setDimensions] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+
+  // Keep the latest callback without re-running the graph effect.
+  const onNodeClickRef = useRef(onNodeClick);
+  useEffect(() => {
+    onNodeClickRef.current = onNodeClick;
+  }, [onNodeClick]);
+
+  useEffect(() => {
+    const onResize = () =>
+      setDimensions({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     if (!svgRef.current || !data) return;
 
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-
-    const svg = d3.select(svgRef.current)
+    const { width, height } = dimensions;
+    const svg = d3
+      .select(svgRef.current)
       .attr('width', width)
       .attr('height', height)
-      .call(d3.zoom<SVGSVGElement, unknown>().on('zoom', (event) => {
-        g.attr('transform', event.transform);
-      }));
+      .call(
+        d3.zoom<SVGSVGElement, unknown>().on('zoom', (event) => {
+          g.attr('transform', event.transform);
+        })
+      );
 
     svg.selectAll('*').remove();
     const g = svg.append('g');
 
-    const simulation = d3.forceSimulation<Node>(data.nodes)
-      .force('link', d3.forceLink<Node, Edge>(data.edges).id((d: any) => d.id).distance(100))
+    // Normalize DB rows (source_id/target_id) into d3 link objects.
+    const nodes: GraphNode[] = data.nodes.map((n) => ({ ...n }));
+    const nodeById = new Map(nodes.map((n) => [n.id, n]));
+    const edges: GraphEdge[] = data.edges.map((e) => {
+      const source = nodeById.get(e.source_id);
+      const target = nodeById.get(e.target_id);
+      return {
+        source: source ?? e.source_id,
+        target: target ?? e.target_id,
+        label: e.label,
+      };
+    });
+
+    const simulation = d3
+      .forceSimulation<GraphNode>(nodes)
+      .force('link', d3
+        .forceLink<GraphNode, GraphEdge>(edges)
+        .id((d) => d.id)
+        .distance(100))
       .force('charge', d3.forceManyBody().strength(-300))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide().radius(50));
 
-    const link = g.append('g')
+    const link = g
+      .append('g')
       .selectAll('line')
-      .data(data.edges)
+      .data(edges)
       .join('line')
       .attr('class', 'link')
       .attr('stroke', '#444');
 
-    const node = g.append('g')
+    const node = g
+      .append('g')
       .selectAll('circle')
-      .data(data.nodes)
+      .data(nodes)
       .join('circle')
       .attr('class', 'node')
       .attr('r', 8)
-      .attr('fill', d => {
+      .attr('fill', (d) => {
         switch (d.type) {
-          case 'idea': return '#3b82f6'; // blue
-          case 'project': return '#10b981'; // green
-          case 'task': return '#f59e0b'; // orange
-          default: return '#9ca3af'; // gray
+          case 'idea':
+            return '#3b82f6'; // blue
+          case 'project':
+            return '#10b981'; // green
+          case 'task':
+            return '#f59e0b'; // orange
+          default:
+            return '#9ca3af'; // gray
         }
       })
-      .call(d3.drag<SVGCircleElement, Node>()
-        .on('start', dragstarted)
-        .on('drag', dragged)
-        .on('end', dragended))
-      .on('click', (event, d) => onNodeClick?.(d));
+      .call((selection) => {
+        d3
+          .drag<SVGCircleElement, GraphNode>()
+          .on('start', dragstarted)
+          .on('drag', dragged)
+          .on('end', dragended)
+          .call(selection);
+      })
+      .on('click', (event, d) => {
+        event.stopPropagation();
+        onNodeClickRef.current?.(d);
+      });
 
-    const label = g.append('g')
+    const label = g
+      .append('g')
       .selectAll('text')
-      .data(data.nodes)
+      .data(nodes)
       .join('text')
-      .text(d => d.name)
+      .text((d) => d.name)
       .attr('font-size', '12px')
       .attr('dx', 12)
       .attr('dy', 4)
@@ -85,18 +134,14 @@ const GraphView: React.FC<GraphViewProps> = ({ data, onNodeClick }) => {
 
     simulation.on('tick', () => {
       link
-        .attr('x1', d => (d.source as any).x)
-        .attr('y1', d => (d.source as any).y)
-        .attr('x2', d => (d.target as any).x)
-        .attr('y2', d => (d.target as any).y);
+        .attr('x1', (d) => (d.source as any).x)
+        .attr('y1', (d) => (d.source as any).y)
+        .attr('x2', (d) => (d.target as any).x)
+        .attr('y2', (d) => (d.target as any).y);
 
-      node
-        .attr('cx', d => d.x!)
-        .attr('cy', d => d.y!);
+      node.attr('cx', (d) => d.x!).attr('cy', (d) => d.y!);
 
-      label
-        .attr('x', d => d.x!)
-        .attr('y', d => d.y!);
+      label.attr('x', (d) => d.x!).attr('y', (d) => d.y!);
     });
 
     function dragstarted(event: any) {
@@ -116,8 +161,10 @@ const GraphView: React.FC<GraphViewProps> = ({ data, onNodeClick }) => {
       event.subject.fy = null;
     }
 
-    return () => simulation.stop();
-  }, [data]);
+    return () => {
+      simulation.stop();
+    };
+  }, [data, dimensions]);
 
   return (
     <div className="w-full h-full bg-zinc-950">

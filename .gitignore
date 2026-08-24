@@ -13,6 +13,11 @@ dist/
 build/
 .next/
 out/
+api/build/
+
+# TypeScript build info
+*.tsbuildinfo
+node_modules/.tmp/
 
 # Environment variables
 .env
@@ -29,9 +34,12 @@ out/
 # Docker volumes
 postgres_data/
 
+# Local artifacts
+*.pgp
+.venv/
+
 # Deployment orchestration artifacts
 deployment.yaml
 synapse-vault.yaml
 demo-infra/
 graphify-out/
-PLAN.md

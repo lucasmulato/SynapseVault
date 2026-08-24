@@ -6,13 +6,13 @@
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node --esm src/index.ts"
   },
   "keywords": [],
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^22.14.0",
     "ts-node": "^10.9.2",
-    "typescript": "^7.0.2"
+    "typescript": "^5.8.0"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

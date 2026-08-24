@@ -33,8 +33,6 @@ services:
     container_name: synapse-vault-ui
     ports:
       - "5173:5173"
-    environment:
-      - VITE_API_URL=http://localhost:3000
     depends_on:
       - api
 
